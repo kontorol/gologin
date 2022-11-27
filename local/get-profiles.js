@@ -395,10 +395,13 @@ class MyGoLogin extends GoLogin {
             userChromeExtensions: options.userChromeExtensions || [],
             webglParams
         };
-        json.navigator.userAgent = options.navigator?.userAgent ? options.navigator?.userAgent : json.navigator.userAgent;
-
-        await this.iter(options, json);
-
+        let user_agent = options.navigator?.userAgent;
+        let orig_user_agent = json.navigator.userAgent;
+        Object.keys(options).map((e)=>{ json[e] = options[e] });
+        if (user_agent === 'random') {
+          json.navigator.userAgent = orig_user_agent;
+        }
+        // console.log('profileOptions', json);    
 
         const response = await requests.post(`${API_URL}/browser`, {
             headers: {
@@ -408,11 +411,11 @@ class MyGoLogin extends GoLogin {
             json,
         });
 
-        if (response.body.statusCode === 400) {
+        if (response.statusCode === 400) {
             throw new Error(`gologin failed account creation with status code, ${response.statusCode} DATA  ${JSON.stringify(response.body.message)}`);
         }
 
-        if (response.body.statusCode === 500) {
+        if (response.statusCode === 500) {
             throw new Error(`gologin failed account creation with status code, ${response.statusCode}`);
         }
         debug(JSON.stringify(response.body));
@@ -507,30 +510,47 @@ class MyGoLogin extends GoLogin {
         let preferences = JSON.parse(preferences_raw.toString());
         let proxy = _.get(profile, 'proxy');
         let name = _.get(profile, 'name');
-        const chromeExtensions = _.get(profile, 'chromeExtensions');
-
-        if (chromeExtensions && chromeExtensions.length) {
-            const ExtensionsManagerInst = new ExtensionsManager();
-            ExtensionsManagerInst.apiUrl = API_URL;
-            await ExtensionsManagerInst.init()
-                .then(() => ExtensionsManagerInst.updateExtensions())
-                .catch(() => {
-                });
+        const chromeExtensions = _.get(profile, 'chromeExtensions') || [];
+        const userChromeExtensions = _.get(profile, 'userChromeExtensions') || [];
+        const allExtensions = [...chromeExtensions, ...userChromeExtensions];
+    
+        if (allExtensions.length) {
+          const ExtensionsManagerInst = new ExtensionsManager();
+          ExtensionsManagerInst.apiUrl = API_URL;
+          await ExtensionsManagerInst.init()
+            .then(() => ExtensionsManagerInst.updateExtensions())
+            .catch(() => {});
             ExtensionsManagerInst.accessToken = this.access_token;
 
             await ExtensionsManagerInst.getExtensionsPolicies();
             let profileExtensionsCheckRes = [];
 
             if (ExtensionsManagerInst.useLocalExtStorage) {
-                profileExtensionsCheckRes = await ExtensionsManagerInst.checkChromeExtensions(chromeExtensions).catch((e) => {
+                const promises = [
+                  ExtensionsManagerInst.checkChromeExtensions(allExtensions)
+                    .then(res => ({ profileExtensionsCheckRes: res }))
+                    .catch((e) => {
                     console.log('checkChromeExtensions error: ', e);
-                    return [];
-                });
-            }
+                    return { profileExtensionsCheckRes: [] };
+                  }),
+                  ExtensionsManagerInst.checkLocalUserChromeExtensions(userChromeExtensions)
+                    .then(res => ({ profileUserExtensionsCheckRes: res }))
+                    .catch((error) => {
+                      console.log('checkUserChromeExtensions error: ', error);
+                      return null;
+                    }),
+                ];
+                const extensionsResult = await Promise.all(promises);
+        
+                const profileExtensionPathRes = extensionsResult.find(el => 'profileExtensionsCheckRes' in el) || {};
+                const profileUserExtensionPathRes = extensionsResult.find(el => 'profileUserExtensionsCheckRes' in el);
+                profileExtensionsCheckRes =
+                  (profileExtensionPathRes?.profileExtensionsCheckRes || []).concat(profileUserExtensionPathRes?.profileUserExtensionsCheckRes || []);
+             }
 
             let extSettings;
             if (ExtensionsManagerInst.useLocalExtStorage) {
-                extSettings = BrowserUserDataManager.setExtPathsAndRemoveDeleted(preferences, profileExtensionsCheckRes);
+                extSettings = await BrowserUserDataManager.setExtPathsAndRemoveDeleted(preferences, profileExtensionsCheckRes, this.profile_id);
             } else {
                 const originalExtensionsFolder = path.join(profilePath, 'Default', 'Extensions');
                 extSettings = await BrowserUserDataManager.setOriginalExtPaths(preferences, originalExtensionsFolder);
@@ -590,6 +610,8 @@ class MyGoLogin extends GoLogin {
         };
         profile.geoLocation = this.getGeolocationParams(profileGeolocation, tzGeoLocation);
         profile.name = name;
+        profile.name_base64 = Buffer.from(name).toString('base64');
+        profile.profile_id = this.profile_id;
 
         profile.webRtc = {
             mode: _.get(profile, 'webRTC.mode') === 'alerted' ? 'public' : _.get(profile, 'webRTC.mode'),
@@ -602,7 +624,7 @@ class MyGoLogin extends GoLogin {
         debug('profile.mediaDevices=', profile.mediaDevices);
 
         const audioContext = profile.audioContext || {};
-        const {mode: audioCtxMode = 'off', noise: audioCtxNoise} = audioContext;
+        const { mode: audioCtxMode = 'off', noise: audioCtxNoise} = audioContext;
         if (profile.timezone.fillBasedOnIp == false) {
             profile.timezone = {
                 id: profile.timezone.timezone,
@@ -636,9 +658,8 @@ class MyGoLogin extends GoLogin {
         profile.custom_fonts = {
             enable: !!fonts?.enableMasking,
         }
-        profile.id = this.profile_id
+
         const gologin = this.convertPreferences(profile);
-        gologin.mediaDevices.uid = mediaDeviceId;
 
         debug(`Writing profile for screenWidth ${profilePath}`, JSON.stringify(gologin));
         gologin.screenWidth = this.resolution.width;
@@ -654,7 +675,7 @@ class MyGoLogin extends GoLogin {
                 throw new Error('No fonts list provided');
             }
 
-            try {
+            try{
                 await BrowserUserDataManager.composeFonts(families, profilePath, this.differentOs);
             } catch (e) {
                 console.trace(e);
@@ -663,13 +684,13 @@ class MyGoLogin extends GoLogin {
 
         const [languages] = this.language.split(';');
 
-        if (preferences.gologin == null) {
+        if (preferences.gologin==null) {
             preferences.gologin = {};
         }
 
         preferences.gologin.langHeader = gologin.language;
         preferences.gologin.languages = languages;
-        debug("convertedPreferences=", preferences.gologin)
+        // debug("convertedPreferences=", preferences.gologin)
         await writeFile(path.join(profilePath, 'Default', 'Preferences'), JSON.stringify(_.merge(preferences, {
             gologin
         })));
@@ -900,6 +921,7 @@ class MyGoLogin extends GoLogin {
             debug('SPAWN CMD', ORBITA_BROWSER, params.join(" "));
         }
 
+        if(this.waitWebsocket){
         debug('GETTING WS URL FROM BROWSER');
 
         let data = await requests.get(`http://127.0.0.1:${remote_debugging_port}/json/version`, {json: true});
@@ -909,7 +931,9 @@ class MyGoLogin extends GoLogin {
 
 
         // this.ws = await this.initWebSocket(_.get(data, 'body.webSocketDebuggerUrl', ''))
-        return [_.get(data, 'body.webSocketDebuggerUrl', ''), pid.pid];
+        return _.get(data, 'body.webSocketDebuggerUrl', ''), pid.pid;
+        }
+        return '';
     }
 
     async start() {
