@@ -1,5 +1,5 @@
 // Usage example: in the terminal enter
-// node example-amazon.js yU0token yU0Pr0f1leiD
+// node example-amazon-cloud-browser.js yU0token yU0Pr0f1leiD
 
 // your token api (located in the settings, api)
 // https://github.com/gologinapp/gologin#usage
@@ -15,14 +15,13 @@ const [_execPath, _filePath, GOLOGIN_API_TOKEN, GOLOGIN_PROFILE_ID] = process.ar
     profile_id: GOLOGIN_PROFILE_ID,
   });
 
-  const { _status, wsUrl } = await GL.start();
+  const { _status, wsUrl } = await GL.startRemote();
   const browser = await puppeteer.connect({
-    browserWSEndpoint: wsUrl.toString(),
+    browserWSEndpoint: wsUrl,
     ignoreHTTPSErrors: true,
   });
 
   const page = await browser.newPage();
-
   const viewPort = GL.getViewPort();
   await page.setViewport({ width: Math.round(viewPort.width * 0.994), height: Math.round(viewPort.height * 0.92) });
   const session = await page.target().createCDPSession();
@@ -31,10 +30,9 @@ const [_execPath, _filePath, GOLOGIN_API_TOKEN, GOLOGIN_PROFILE_ID] = process.ar
   await session.detach();
 
   await page.goto('https://www.amazon.com/-/dp/B0771V1JZX');
-
   const content = await page.content();
   const matchData = content.match(/'initial': (.*)}/);
-  if (matchData == null || matchData.length==0){
+  if (matchData === null || matchData.length === 0){
     console.log('no images found');
   } else {
     const data = JSON.parse(matchData[1]);
@@ -42,6 +40,5 @@ const [_execPath, _filePath, GOLOGIN_API_TOKEN, GOLOGIN_PROFILE_ID] = process.ar
     console.log('images=', images);
   }
 
-  await browser.close();
-  await GL.stop();
+  await GL.stopRemote();
 })();
