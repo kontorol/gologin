@@ -59,6 +59,7 @@ export class GoLogin {
       this.waitWebsocket = false;
     }
 
+    this.isCloudHeadless = options.isCloudHeadless || true;
     this.isNewCloudBrowser = true;
     if (options.isNewCloudBrowser === false) {
       this.isNewCloudBrowser = false;
@@ -72,6 +73,7 @@ export class GoLogin {
     this.remote_debugging_port = options.remote_debugging_port || 0;
     this.timezone = options.timezone;
     this.extensionPathsToInstall = [];
+    this.customArgs = options.args || [];
     this.restoreLastSession = options.restoreLastSession || false;
     this.processSpawned = null;
     this.processKillTimeout = 1 * 1000;
@@ -836,7 +838,7 @@ export class GoLogin {
   }
 
   async spawnBrowser() {
-    let { remote_debugging_port } = this;
+    let { remote_debugging_port, customArgs } = this;
     if (!remote_debugging_port) {
       remote_debugging_port = await this.getRandomPort();
     }
@@ -926,6 +928,8 @@ export class GoLogin {
       if (this.restoreLastSession) {
         params.push('--restore-last-session');
       }
+
+      params.push(...new Set(customArgs));
 
       console.log(params);
       const child = execFile(ORBITA_BROWSER, params, { env });
@@ -1461,7 +1465,7 @@ export class GoLogin {
 
     const profileResponse = await requests.post(`${API_URL}/browser/${this.profile_id}/web`, {
       headers: { 'Authorization': `Bearer ${this.access_token}` },
-      json: { isNewCloudBrowser: this.isNewCloudBrowser },
+      json: { isNewCloudBrowser: this.isNewCloudBrowser, isHeadless: this.isCloudHeadless },
     });
 
     debug('profileResponse', profileResponse.statusCode, profileResponse.body);
